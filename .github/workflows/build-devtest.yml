@@ -149,6 +149,20 @@ jobs:
         with:
           cmake-version: '3.31.6'
 
+      # Ninja is a single-config generator. llama.cpp's vulkan-shaders-gen
+      # ExternalProject install rule fails under the multi-config Visual
+      # Studio generator, so build the sidecar with Ninja instead.
+      - name: Setup MSVC environment (Windows)
+        if: contains(matrix.platform, 'windows')
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja (Windows)
+        if: contains(matrix.platform, 'windows')
+        shell: bash
+        run: choco install ninja -y --no-progress
+
       # macOS signing setup
       - name: Import Apple Developer Certificate
         if: contains(matrix.platform, 'macos') && github.event.inputs.sign-build == 'true'
@@ -349,6 +363,9 @@ jobs:
           elif [[ "${{ matrix.platform }}" == *"windows"* ]]; then
             LLAMA_FEATURES="--features vulkan"
             echo "Using Vulkan GPU acceleration for Windows"
+            export CMAKE_GENERATOR=Ninja
+            ninja --version
+            cmake --version
           else
             echo "Using CPU-only mode for Linux"
           fi
