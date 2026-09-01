@@ -45,6 +45,9 @@ pub(crate) mod common;
 // Shared constants
 pub mod constants;
 
+// Recording output format (codec + container selection)
+pub mod format;
+
 // Retranscription module (re-process stored audio with different settings)
 pub mod retranscription;
 
@@ -89,7 +92,8 @@ pub use recording_commands::{
     is_recording, get_transcription_status, RecordingArgs, TranscriptionStatus, TranscriptUpdate
 };
 pub use recording_preferences::{
-    RecordingPreferences, get_default_recordings_folder
+    RecordingPreferences, get_default_recordings_folder,
+    current_recording_format, set_current_recording_format
 };
 pub use recording_saver::RecordingSaver;
 pub use level_monitor::{AudioLevelMonitor, AudioLevelData, AudioLevelUpdate};
@@ -97,8 +101,11 @@ pub use buffer_pool::{AudioBufferPool, PooledBuffer};
 pub use post_processor::{PostProcessor, PostProcessRequest, PostProcessResponse};
 pub use hardware_detector::{HardwareProfile, AdaptiveWhisperConfig, PerformanceTier, GpuType};
 pub use encode::{
-    encode_single_audio, AudioInput
+    encode_single_audio, encode_single_audio_as, AudioInput
 };
+
+// Export recording format handling
+pub use format::{RecordingFormat, RECORDING_FORMATS, DEFAULT_RECORDING_FORMAT};
 pub use device_monitor::{AudioDeviceMonitor, DeviceEvent, DeviceMonitorType};
 
 // Export device detection and diagnostics

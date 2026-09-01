@@ -3,8 +3,15 @@ import { Switch } from '@/components/ui/switch';
 import { FolderOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
+import {
+  RECORDING_FORMATS,
+  RECORDING_FORMAT_INFO,
+  DEFAULT_RECORDING_FORMAT,
+  toRecordingFormat,
+} from '@/constants/audioFormats';
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -22,7 +29,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const [preferences, setPreferences] = useState<RecordingPreferences>({
     save_folder: '',
     auto_save: true,
-    file_format: 'mp4',
+    file_format: DEFAULT_RECORDING_FORMAT,
     preferred_mic_device: null,
     preferred_system_device: null
   });
@@ -96,6 +103,20 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     });
   };
 
+  const handleFileFormatChange = async (format: string) => {
+    const nextFormat = toRecordingFormat(format);
+    const newPreferences = { ...preferences, file_format: nextFormat };
+    setPreferences(newPreferences);
+    await savePreferences(newPreferences, {
+      title: `Recordings will be saved as ${RECORDING_FORMAT_INFO[nextFormat].label}`,
+      description: RECORDING_FORMAT_INFO[nextFormat].sizePerHour,
+    });
+
+    await Analytics.track('recording_file_format_changed', {
+      file_format: nextFormat
+    });
+  };
+
   const handleOpenFolder = async () => {
     try {
       await invoke('open_recordings_folder');
@@ -121,27 +142,38 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     }
   };
 
-  const savePreferences = async (prefs: RecordingPreferences) => {
+  const savePreferences = async (
+    prefs: RecordingPreferences,
+    successToast?: { title: string; description?: string }
+  ) => {
     setSaving(true);
     try {
       await invoke('set_recording_preferences', { preferences: prefs });
       onSave?.(prefs);
 
-      // Show success toast with device details
-      const micDevice = prefs.preferred_mic_device || 'Default';
-      const systemDevice = prefs.preferred_system_device || 'Default';
-      toast.success("Device preferences saved", {
-        description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
-      });
+      if (successToast) {
+        toast.success(successToast.title, { description: successToast.description });
+      } else {
+        // Show success toast with device details
+        const micDevice = prefs.preferred_mic_device || 'Default';
+        const systemDevice = prefs.preferred_system_device || 'Default';
+        toast.success("Device preferences saved", {
+          description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
+        });
+      }
     } catch (error) {
       console.error('Failed to save recording preferences:', error);
-      toast.error("Failed to save device preferences", {
+      toast.error("Failed to save preferences", {
         description: error instanceof Error ? error.message : String(error)
       });
     } finally {
       setSaving(false);
     }
   };
+
+  // Preferences may hold a value written by another build, so normalise it
+  // before using it to index into the format table.
+  const selectedFormat = toRecordingFormat(preferences.file_format);
 
   if (loading) {
     return (
@@ -193,12 +225,33 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             </button>
           </div>
 
-          <div className="p-4 border rounded-lg bg-blue-50">
-            <div className="text-sm text-blue-800">
-              <strong>File Format:</strong> {preferences.file_format.toUpperCase()} files
+          <div className="p-4 border rounded-lg">
+            <div className="font-medium mb-1">File Format</div>
+            <div className="text-sm text-gray-600 mb-3">
+              The audio format your meeting recordings are saved in.
             </div>
-            <div className="text-xs text-blue-600 mt-1">
-              Recordings are saved with timestamp: recording_YYYYMMDD_HHMMSS.{preferences.file_format}
+            <Select
+              value={selectedFormat}
+              onValueChange={handleFileFormatChange}
+              disabled={saving}
+            >
+              <SelectTrigger id="file-format-selection" className="w-full">
+                <SelectValue placeholder="Select file format" />
+              </SelectTrigger>
+              <SelectContent>
+                {RECORDING_FORMATS.map((format) => (
+                  <SelectItem key={format} value={format}>
+                    {RECORDING_FORMAT_INFO[format].label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="text-xs text-gray-600 mt-2">
+              {RECORDING_FORMAT_INFO[selectedFormat].description}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              About {RECORDING_FORMAT_INFO[selectedFormat].sizePerHour}. Saved as{' '}
+              <code className="font-mono">audio.{selectedFormat}</code> in each meeting folder.
             </div>
           </div>
         </div>

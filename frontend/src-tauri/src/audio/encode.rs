@@ -1,4 +1,5 @@
 use super::ffmpeg::find_ffmpeg_path; // Correct path to encode module
+use super::format::RecordingFormat;
 use super::AudioDevice;
 use std::io::Write;
 use std::sync::Arc;
@@ -15,13 +16,43 @@ pub struct AudioInput {
     pub device: Arc<AudioDevice>,
 }
 
+/// Encode raw interleaved f32 PCM into an audio file.
+///
+/// The codec and container are chosen from `output_path`'s extension, so
+/// callers control the format simply by naming the file (`audio.mp3`,
+/// `audio.wav`, ...). An unrecognised extension falls back to the app's
+/// default recording format rather than failing.
 pub fn encode_single_audio(
     data: &[u8],
     sample_rate: u32,
     channels: u16,
     output_path: &PathBuf,
 ) -> anyhow::Result<()> {
-    debug!("Starting FFmpeg process for {} bytes of audio data", data.len());
+    let format = RecordingFormat::from_path(output_path).unwrap_or_else(|| {
+        debug!(
+            "No known audio extension on {:?}, falling back to default format",
+            output_path
+        );
+        RecordingFormat::default()
+    });
+
+    encode_single_audio_as(data, sample_rate, channels, output_path, format)
+}
+
+/// Encode raw interleaved f32 PCM into `output_path` using an explicit format.
+pub fn encode_single_audio_as(
+    data: &[u8],
+    sample_rate: u32,
+    channels: u16,
+    output_path: &PathBuf,
+    format: RecordingFormat,
+) -> anyhow::Result<()> {
+    debug!(
+        "Starting FFmpeg process for {} bytes of audio data -> {} ({:?})",
+        data.len(),
+        format.display_name(),
+        output_path
+    );
 
     if data.is_empty() {
         return Err(anyhow::anyhow!("No audio data provided for encoding"));
@@ -32,6 +63,10 @@ pub fn encode_single_audio(
     })?;
 
     debug!("Using FFmpeg at: {:?}", ffmpeg_path);
+
+    let output_str = output_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Output path is not valid UTF-8: {:?}", output_path))?;
 
     let mut command = Command::new(ffmpeg_path);
     command
@@ -44,18 +79,9 @@ pub fn encode_single_audio(
             &channels.to_string(),
             "-i",
             "pipe:0",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k", // Increased from 64k for better audio quality (especially for speech)
-            "-profile:a",
-            "aac_low", // Use AAC-LC profile for better compatibility
-            "-movflags",
-            "+faststart", // Optimize for web streaming
-            "-f",
-            "mp4",
-            output_path.to_str().unwrap(),
         ])
+        .args(format.ffmpeg_output_args())
+        .args(["-y", output_str])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -71,16 +97,23 @@ pub fn encode_single_audio(
     debug!("FFmpeg command: {:?}", command);
 
     #[allow(clippy::zombie_processes)]
-    let mut ffmpeg = command.spawn().expect("Failed to spawn FFmpeg process");
+    let mut ffmpeg = command
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn FFmpeg process: {}", e))?;
     debug!("FFmpeg process spawned");
-    let mut stdin = ffmpeg.stdin.take().expect("Failed to open stdin");
+    let mut stdin = ffmpeg
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to open FFmpeg stdin"))?;
 
     stdin.write_all(data)?;
 
     debug!("Dropping stdin");
     drop(stdin);
     debug!("Waiting for FFmpeg process to exit");
-    let output = ffmpeg.wait_with_output().unwrap();
+    let output = ffmpeg
+        .wait_with_output()
+        .map_err(|e| anyhow::anyhow!("Failed to wait for FFmpeg process: {}", e))?;
     let status = output.status;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -93,8 +126,10 @@ pub fn encode_single_audio(
         error!("FFmpeg process failed with status: {}", status);
         error!("FFmpeg stderr: {}", stderr);
         return Err(anyhow::anyhow!(
-            "FFmpeg process failed with status: {}",
-            status
+            "FFmpeg failed to write {} ({}): {}",
+            format.display_name(),
+            status,
+            stderr
         ));
     }
 

@@ -1,8 +1,12 @@
 use log::{info, warn};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::RwLock;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
+
+use super::format::{RecordingFormat, DEFAULT_RECORDING_FORMAT};
 
 use anyhow::Result;
 #[cfg(target_os = "macos")]
@@ -10,6 +14,40 @@ use log::error;
 
 #[cfg(target_os = "macos")]
 use crate::audio::capture::AudioCaptureBackend;
+
+/// Format new recordings are saved in.
+///
+/// Kept as process-global state (mirroring how the macOS capture backend is
+/// handled) so the save pipeline can read it without threading a parameter
+/// through every layer. It is refreshed whenever preferences are loaded or
+/// saved, and preferences are always loaded before a recording starts.
+static CURRENT_RECORDING_FORMAT: Lazy<RwLock<RecordingFormat>> =
+    Lazy::new(|| RwLock::new(RecordingFormat::default()));
+
+/// The format new recordings will be saved in.
+pub fn current_recording_format() -> RecordingFormat {
+    CURRENT_RECORDING_FORMAT
+        .read()
+        .map(|f| *f)
+        .unwrap_or_default()
+}
+
+/// Update the format new recordings will be saved in.
+pub fn set_current_recording_format(format: RecordingFormat) {
+    match CURRENT_RECORDING_FORMAT.write() {
+        Ok(mut current) => {
+            if *current != format {
+                info!(
+                    "Recording format changed: {} -> {}",
+                    current.display_name(),
+                    format.display_name()
+                );
+            }
+            *current = format;
+        }
+        Err(e) => warn!("Failed to update current recording format: {}", e),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingPreferences {
@@ -30,7 +68,7 @@ impl Default for RecordingPreferences {
         Self {
             save_folder: get_default_recordings_folder(),
             auto_save: true,
-            file_format: "mp4".to_string(),
+            file_format: DEFAULT_RECORDING_FORMAT.to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
             #[cfg(target_os = "macos")]
@@ -128,6 +166,13 @@ pub async fn load_recording_preferences<R: Runtime>(
         RecordingPreferences::default()
     };
 
+    // Normalise the stored format so an unknown/corrupt value can never reach
+    // the save pipeline, and publish it for the recording saver to read.
+    let mut prefs = prefs;
+    let format = RecordingFormat::parse_or_default(&prefs.file_format);
+    prefs.file_format = format.extension().to_string();
+    set_current_recording_format(format);
+
     info!("Loaded recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           prefs.save_folder, prefs.auto_save, prefs.file_format,
           prefs.preferred_mic_device, prefs.preferred_system_device);
@@ -139,6 +184,20 @@ pub async fn save_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
     preferences: &RecordingPreferences,
 ) -> Result<()> {
+    // Reject unknown formats rather than persisting something the encoder
+    // cannot produce.
+    let format = RecordingFormat::parse_or_default(&preferences.file_format);
+    if format.extension() != preferences.file_format.to_ascii_lowercase() {
+        warn!(
+            "Unsupported recording format '{}' requested, falling back to {}",
+            preferences.file_format,
+            format.display_name()
+        );
+    }
+    let mut preferences = preferences.clone();
+    preferences.file_format = format.extension().to_string();
+    let preferences = &preferences;
+
     info!("Saving recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           preferences.save_folder, preferences.auto_save, preferences.file_format,
           preferences.preferred_mic_device, preferences.preferred_system_device);
@@ -170,6 +229,9 @@ pub async fn save_recording_preferences<R: Runtime>(
             crate::audio::capture::set_current_backend(backend);
         }
     }
+
+    // Publish the format for the recording saver
+    set_current_recording_format(format);
 
     // Ensure the directory exists
     ensure_recordings_directory(&preferences.save_folder)?;

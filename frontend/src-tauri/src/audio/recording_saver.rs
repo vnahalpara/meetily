@@ -234,11 +234,20 @@ impl RecordingSaver {
         // Create meeting folder structure (with or without .checkpoints/ subdirectory)
         let meeting_folder = create_meeting_folder(&base_folder, meeting_name, create_checkpoints)?;
 
+        // Format comes from the user's recording preferences, which are loaded
+        // before a recording starts.
+        let output_format = super::recording_preferences::current_recording_format();
+
         // Only initialize incremental saver if checkpoints are needed (auto_save is true)
         if create_checkpoints {
-            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000)?;
+            let incremental_saver =
+                IncrementalAudioSaver::new(meeting_folder.clone(), 48000, output_format)?;
             self.incremental_saver = Some(Arc::new(AsyncMutex::new(incremental_saver)));
-            info!("✅ Incremental audio saver initialized for meeting: {}", meeting_name);
+            info!(
+                "✅ Incremental audio saver initialized for meeting: {} (format: {})",
+                meeting_name,
+                output_format.display_name()
+            );
         } else {
             info!("⚠️  Skipped incremental audio saver (auto-save disabled)");
         }
@@ -255,7 +264,11 @@ impl RecordingSaver {
                 microphone: None,  // Could be enhanced to store actual device names
                 system_audio: None,
             },
-            audio_file: if create_checkpoints { "audio.mp4".to_string() } else { "".to_string() },
+            audio_file: if create_checkpoints {
+                format!("audio.{}", output_format.extension())
+            } else {
+                String::new()
+            },
             transcript_file: "transcripts.json".to_string(),
             sample_rate: 48000,
             status: "recording".to_string(),
@@ -379,7 +392,7 @@ impl RecordingSaver {
             return Ok(None);
         }
 
-        // Finalize incremental saver (merge checkpoints into final audio.mp4)
+        // Finalize incremental saver (merge checkpoints into the final audio file)
         let final_audio_path = if let Some(saver_arc) = &self.incremental_saver {
             let mut saver = saver_arc.lock().await;
             match saver.finalize().await {
