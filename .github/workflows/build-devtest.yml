@@ -141,6 +141,14 @@ jobs:
           cd frontend
           pnpm install
 
+      # llama.cpp's vulkan-shaders-gen ExternalProject does not generate
+      # install rules under CMake 4.x, which the runner image now ships.
+      - name: Pin CMake 3.31 (Windows)
+        if: contains(matrix.platform, 'windows')
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.31.6'
+
       # macOS signing setup
       - name: Import Apple Developer Certificate
         if: contains(matrix.platform, 'macos') && github.event.inputs.sign-build == 'true'
