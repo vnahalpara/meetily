@@ -364,6 +364,13 @@ jobs:
             LLAMA_FEATURES="--features vulkan"
             echo "Using Vulkan GPU acceleration for Windows"
             export CMAKE_GENERATOR=Ninja
+            # With the MSVC env set up, rustc takes link.exe from PATH, and
+            # Git Bash's GNU coreutils "link" shadows MSVC's linker. Put the
+            # MSVC tools directory first so the real link.exe wins.
+            VCBIN="$(cygpath -u "$VCToolsInstallDir")"
+            VCBIN="${VCBIN%/}/bin/Hostx64/x64"
+            export PATH="$VCBIN:$PATH"
+            echo "link.exe -> $(command -v link.exe || echo 'not found')"
             ninja --version
             cmake --version
           else
